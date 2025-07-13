@@ -22,6 +22,10 @@ def generate_auth_token_on_login(request, user, **kwargs):
     token, created = Token.objects.get_or_create(user=user)
     print(f"Token generated for user {user.username}: {token.key}")
 
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+
+@method_decorator(csrf_exempt, name='dispatch')
 class LinkedInAuthCheckView(APIView):
     def get(self, request):
         user = request.user
@@ -41,6 +45,7 @@ class LinkedInAuthCheckView(APIView):
 
         return Response({"access_token": token_obj.token})
 
+@method_decorator(csrf_exempt, name='dispatch')
 class LinkedInGetTokenView(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -57,6 +62,7 @@ class LinkedInGetTokenView(APIView):
 
         return Response({"access_token": token_obj.token})
 
+@method_decorator(csrf_exempt, name='dispatch')
 class LinkedInPostView(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
