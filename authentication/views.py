@@ -1,6 +1,9 @@
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.authentication import TokenAuthentication
+from rest_framework.authtoken.models import Token
 from allauth.socialaccount.models import SocialAccount, SocialToken
 from django.conf import settings
 import os
@@ -8,68 +11,96 @@ import re
 import json
 from dotenv import load_dotenv
 from google import genai
+from allauth.account.signals import user_logged_in
+from django.dispatch import receiver
 
-# Load environment variables
+# ===============================================
+# Load environment variables and Gemini client
+# ===============================================
+
 load_dotenv()
-
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# Helper: validate token (placeholder)
-def validate_linkedin_token(token):
-    # Implement actual LinkedIn token validation logic here if needed
-    # Currently returns True as placeholder
-    return True
+# ===============================================
+# Generate DRF Token on successful LinkedIn login
+# ===============================================
 
-# Helper: post content to LinkedIn (placeholder)
-def post_to_linkedin_api(token, content):
-    # Implement actual LinkedIn post logic here using their API
-    print(f"Posting to LinkedIn with token: {token} and content: {content}")
-    return True
+@receiver(user_logged_in)
+def generate_auth_token_on_login(request, user, **kwargs):
+    """
+    Signal to create DRF token when user logs in via LinkedIn.
+    """
+    token, created = Token.objects.get_or_create(user=user)
+    # Token is saved and can be retrieved via API
+    print(f"Token generated for user {user.username}: {token.key}")
+
+# ===============================================
+# LinkedIn Post View
+# ===============================================
 
 class LinkedInPostView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
     def post(self, request):
         """
-        Receives token + content.
-        If token is valid, posts to LinkedIn.
-        If missing or invalid, returns login URL for frontend to authenticate first.
+        Receives content from frontend.
+        Uses user's linked LinkedIn token to post.
+        If user is not connected, returns login URL.
         """
-        token = request.data.get("token")
+
         content = request.data.get("content")
+        user = request.user
 
-        if not token:
-            login_url = f"{settings.SITE_URL}/accounts/oidc/<provider_id>/login/"
+        # Validate input
+        if not content:
+            return Response({"error": "Content is required."}, status=400)
+
+        # Get linked LinkedIn account
+        account = SocialAccount.objects.filter(user=user, provider='linkedin_oauth2').first()
+        if not account:
+            login_url = f"{settings.SITE_URL}/accounts/linkedin_oauth2/login/"
             return Response({"status": "login_required", "login_url": login_url}, status=401)
 
-        # Validate token
-        is_valid = validate_linkedin_token(token)
-        if not is_valid:
-            login_url = f"{settings.SITE_URL}/accounts/oidc/<provider_id>/login/"
+        token_obj = SocialToken.objects.filter(account=account).first()
+        linkedin_token = token_obj.token if token_obj else None
+
+        if not linkedin_token:
+            login_url = f"{settings.SITE_URL}/accounts/linkedin_oauth2/login/"
             return Response({"status": "login_required", "login_url": login_url}, status=401)
 
-        # Post to LinkedIn
-        success = post_to_linkedin_api(token, content)
-        if success:
-            return Response({"status": "posted", "message": "Content posted successfully."})
-        else:
-            return Response({"status": "error", "message": "Failed to post to LinkedIn."}, status=500)
+        # Placeholder for actual LinkedIn posting logic
+        print(f"Posting to LinkedIn with token: {linkedin_token} and content: {content}")
 
-class LinkedInTokenExchangeView(APIView):
-    def post(self, request):
+        return Response({"status": "posted", "message": "Content posted successfully."})
+
+# ===============================================
+# LinkedIn Get Token View
+# ===============================================
+
+class LinkedInGetTokenView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
         """
-        Exchanges auth code for access token.
+        Returns user's LinkedIn token if connected.
         """
-        auth_code = request.data.get("auth_code")
-        if not auth_code:
-            return Response({"error": "Auth code required."}, status=400)
+        user = request.user
+        account = SocialAccount.objects.filter(user=user, provider='linkedin_oauth2').first()
 
-        # Exchange auth code with LinkedIn (placeholder logic)
-        # Replace with your real token exchange implementation
-        token_response = {
-            "access_token": f"fake_access_token_for_{auth_code}",
-            "expires_in": 3600
-        }
+        if not account:
+            return Response({"error": "LinkedIn account not connected."}, status=400)
 
-        return Response({"access_token": token_response["access_token"]})
+        token_obj = SocialToken.objects.filter(account=account).first()
+        if not token_obj:
+            return Response({"error": "Token not found."}, status=400)
+
+        return Response({"access_token": token_obj.token})
+
+# ===============================================
+# LLM Ask View
+# ===============================================
 
 def evaluate_response(user_prompt, response, extracted_data):
     eval_prompt = f"""Rate this AI response quality from 0.0 to 1.0:
@@ -110,7 +141,6 @@ class LLMAskView(APIView):
         if not user_prompt:
             return Response({"error": "Prompt required"}, status=status.HTTP_400_BAD_REQUEST)
 
-        # First attempt
         prompt = f"""You are an intelligent web content analyzer. Analyze the data and answer the user query accurately.
 
 Data: {extracted_data}
