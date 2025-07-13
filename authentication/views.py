@@ -14,49 +14,59 @@ from google import genai
 from allauth.account.signals import user_logged_in
 from django.dispatch import receiver
 
-# ===============================================
-# Load environment variables and Gemini client
-# ===============================================
-
 load_dotenv()
 client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
-# ===============================================
-# Generate DRF Token on successful LinkedIn login
-# ===============================================
-
 @receiver(user_logged_in)
 def generate_auth_token_on_login(request, user, **kwargs):
-    """
-    Signal to create DRF token when user logs in via LinkedIn.
-    """
     token, created = Token.objects.get_or_create(user=user)
-    # Token is saved and can be retrieved via API
     print(f"Token generated for user {user.username}: {token.key}")
 
-# ===============================================
-# LinkedIn Post View
-# ===============================================
+class LinkedInAuthCheckView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        account = SocialAccount.objects.filter(user=user, provider='linkedin_oauth2').first()
+        if not account:
+            login_url = f"{settings.SITE_URL}/accounts/linkedin_oauth2/login/"
+            return Response({"status": "login_required", "login_url": login_url}, status=401)
+
+        token_obj = SocialToken.objects.filter(account=account).first()
+        if not token_obj:
+            login_url = f"{settings.SITE_URL}/accounts/linkedin_oauth2/login/"
+            return Response({"status": "login_required", "login_url": login_url}, status=401)
+
+        return Response({"access_token": token_obj.token})
+
+class LinkedInGetTokenView(APIView):
+    authentication_classes = [TokenAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        user = request.user
+        account = SocialAccount.objects.filter(user=user, provider='linkedin_oauth2').first()
+        if not account:
+            return Response({"error": "LinkedIn account not connected."}, status=400)
+
+        token_obj = SocialToken.objects.filter(account=account).first()
+        if not token_obj:
+            return Response({"error": "Token not found."}, status=400)
+
+        return Response({"access_token": token_obj.token})
 
 class LinkedInPostView(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
-        """
-        Receives content from frontend.
-        Uses user's linked LinkedIn token to post.
-        If user is not connected, returns login URL.
-        """
-
         content = request.data.get("content")
         user = request.user
 
-        # Validate input
         if not content:
             return Response({"error": "Content is required."}, status=400)
 
-        # Get linked LinkedIn account
         account = SocialAccount.objects.filter(user=user, provider='linkedin_oauth2').first()
         if not account:
             login_url = f"{settings.SITE_URL}/accounts/linkedin_oauth2/login/"
@@ -69,38 +79,8 @@ class LinkedInPostView(APIView):
             login_url = f"{settings.SITE_URL}/accounts/linkedin_oauth2/login/"
             return Response({"status": "login_required", "login_url": login_url}, status=401)
 
-        # Placeholder for actual LinkedIn posting logic
         print(f"Posting to LinkedIn with token: {linkedin_token} and content: {content}")
-
         return Response({"status": "posted", "message": "Content posted successfully."})
-
-# ===============================================
-# LinkedIn Get Token View
-# ===============================================
-
-class LinkedInGetTokenView(APIView):
-    authentication_classes = [TokenAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        """
-        Returns user's LinkedIn token if connected.
-        """
-        user = request.user
-        account = SocialAccount.objects.filter(user=user, provider='linkedin_oauth2').first()
-
-        if not account:
-            return Response({"error": "LinkedIn account not connected."}, status=400)
-
-        token_obj = SocialToken.objects.filter(account=account).first()
-        if not token_obj:
-            return Response({"error": "Token not found."}, status=400)
-
-        return Response({"access_token": token_obj.token})
-
-# ===============================================
-# LLM Ask View
-# ===============================================
 
 def evaluate_response(user_prompt, response, extracted_data):
     eval_prompt = f"""Rate this AI response quality from 0.0 to 1.0:

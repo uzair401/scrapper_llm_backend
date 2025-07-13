@@ -1,10 +1,9 @@
-# urls.py
-
 from django.urls import path
-from .views import LinkedInAuthCheckView, LLMAskView, LinkedInPostView
+from .views import LinkedInAuthCheckView, LinkedInGetTokenView, LinkedInPostView, LLMAskView
 
 urlpatterns = [
     path('api/linkedin/check-auth/', LinkedInAuthCheckView.as_view()),
+    path('api/linkedin/get-token/', LinkedInGetTokenView.as_view()),
+    path('api/linkedin/post/', LinkedInPostView.as_view()),
     path('api/ask', LLMAskView.as_view(), name='llm-ask'),
-    path('api/linkedin/post/', LinkedInPostView.as_view(), name='linkedin-post'),
 ]
