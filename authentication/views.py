@@ -23,11 +23,12 @@ def generate_auth_token_on_login(request, user, **kwargs):
     print(f"Token generated for user {user.username}: {token.key}")
 
 class LinkedInAuthCheckView(APIView):
-    authentication_classes = [TokenAuthentication]
-    permission_classes = [IsAuthenticated]
-
     def get(self, request):
         user = request.user
+        if not user.is_authenticated:
+            login_url = f"{settings.SITE_URL}/accounts/linkedin_oauth2/login/"
+            return Response({"status": "login_required", "login_url": login_url}, status=401)
+
         account = SocialAccount.objects.filter(user=user, provider='linkedin_oauth2').first()
         if not account:
             login_url = f"{settings.SITE_URL}/accounts/linkedin_oauth2/login/"
