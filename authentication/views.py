@@ -1,119 +1,88 @@
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import status
-from rest_framework.permissions import IsAuthenticated
-from allauth.socialaccount.models import SocialAccount, SocialToken
-from django.conf import settings
-import os
-import re
+import streamlit as st
+import requests
 import json
-from dotenv import load_dotenv
-from google import genai
+from scrapper import site_scrapper, extract_body_content, clean_body_content
+from configuration import FASTAPI_URL
 
-# Load environment variables
-load_dotenv()
+st.set_page_config(page_title="AI Web Scraper", layout="wide")
+st.title("AI Web Scraper by Uzair")
 
-client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
+if 'linkedin_token' not in st.session_state:
+    st.session_state.linkedin_token = None
 
-class LinkedInAuthCheckView(APIView):
-    permission_classes = [IsAuthenticated]
+if 'scraped_result' not in st.session_state:
+    st.session_state.scraped_result = None
 
-    def post(self, request):
-        """
-        Checks if user is logged in with LinkedIn.
-        If yes, returns ready status.
-        If not, returns LinkedIn login URL for frontend redirection.
-        """
-        account = SocialAccount.objects.filter(user=request.user, provider='openid_connect').first()
-        if not account:
-            login_url = f"{settings.SITE_URL}/accounts/oidc/<provider_id>/login/"
-            return Response({
-                "status": "not_connected",
-                "login_url": login_url
-            }, status=401)
+if 'show_scraped' not in st.session_state:
+    st.session_state.show_scraped = False
 
-        token = SocialToken.objects.filter(account=account).first()
-        urn = account.extra_data.get("sub")
+url = st.text_input("Enter Website URL")
+prompt = st.text_area("What do you want to know about this website?")
 
-        # Placeholder for future posting implementation
-        # e.g., call LinkedIn post API here
+if st.button("Scrape and Analyze"):
+    if url and prompt:
+        try:
+            html = site_scrapper(url)
+            body = extract_body_content(html)
+            cleaned = clean_body_content(body)
 
-        return Response({
-            "status": "connected",
-            "message": "LinkedIn is connected. Ready for posting when implemented."
-        })
+            response = requests.post(f"{FASTAPI_URL}/ask", json={"prompt": prompt, "data": cleaned})
+            response.raise_for_status()
+            result_json = response.json()
+            cleaned_response = result_json.get("response", "No response field found.")
 
+            st.markdown("### AI Analysis")
+            st.markdown(cleaned_response)
 
-def evaluate_response(user_prompt, response, extracted_data):
-    eval_prompt = f"""Rate this AI response quality from 0.0 to 1.0:
+            st.session_state.scraped_result = {
+                'url': url,
+                'prompt': prompt,
+                'analysis': cleaned_response,
+                'scraped_content': cleaned
+            }
+            st.session_state.show_scraped = False
 
-User Query: {user_prompt}
-AI Response: {response}
-Data Available: {extracted_data[:1000]}...
+        except Exception as e:
+            st.error(f"Scraping failed: {e}")
+    else:
+        st.warning("Please enter both URL and prompt")
 
-Rate accuracy and relevance. Respond only with JSON:
-{{"accuracy": 0.0-1.0, "relevance": 0.0-1.0, "overall": 0.0-1.0, "needs_retry": true/false}}"""
+if st.session_state.scraped_result:
+    col1, col2 = st.columns([3, 1])
 
-    try:
-        eval_response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=eval_prompt
-        )
-        json_match = re.search(r'\{.*\}', eval_response.text, re.DOTALL)
-        if json_match:
-            return json.loads(json_match.group())
-    except:
-        pass
+    with col1:
+        if st.button("Show Scraped Content"):
+            st.session_state.show_scraped = not st.session_state.show_scraped
 
-    low_quality_signs = ["don't have enough", "cannot answer", "insufficient", "not enough details"]
-    has_low_quality = any(sign in response.lower() for sign in low_quality_signs)
+    with col2:
+        if st.button("Post to LinkedIn"):
+            headers = {}
+            if st.session_state.linkedin_token:
+                headers["Authorization"] = f"Bearer {st.session_state.linkedin_token}"
 
-    return {
-        "accuracy": 0.3 if has_low_quality else 0.7,
-        "relevance": 0.4 if has_low_quality else 0.7,
-        "overall": 0.35 if has_low_quality else 0.7,
-        "needs_retry": has_low_quality or len(response) < 100
-    }
+            try:
+                response = requests.post(f"{FASTAPI_URL}/api/linkedin/check-auth/", headers=headers, json={"content": st.session_state.scraped_result['analysis']})
+                if response.status_code == 200:
+                    st.success("✅ LinkedIn is connected. Post logic will be implemented here.")
+                elif response.status_code == 401:
+                    data = response.json()
+                    login_url = data.get("login_url")
+                    st.warning("🔗 Please login to LinkedIn first.")
+                    st.markdown(f"[Click here to login to LinkedIn]({login_url})")
+                else:
+                    st.error("LinkedIn auth check failed.")
+            except Exception as e:
+                st.error(f"LinkedIn auth check failed: {e}")
 
+if st.session_state.show_scraped:
+    st.markdown("### Scraped Content")
+    st.text_area("", st.session_state.scraped_result['scraped_content'], height=300)
 
-class LLMAskView(APIView):
-    def post(self, request):
-        user_prompt = request.data.get("prompt")
-        extracted_data = request.data.get("data", "")
-
-        if not user_prompt:
-            return Response({"error": "Prompt required"}, status=status.HTTP_400_BAD_REQUEST)
-
-        # First attempt
-        prompt = f"""You are an intelligent web content analyzer. Analyze the data and answer the user query accurately.
-
-Data: {extracted_data}
-User Query: {user_prompt}
-
-Provide a comprehensive response based strictly on the provided data. Use specific examples and details from the data."""
-
-        response_obj = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-        response_text = response_obj.text
-
-        eval_result = evaluate_response(user_prompt, response_text, extracted_data)
-
-        if eval_result.get("needs_retry"):
-            retry_prompt = f"""Your previous response was low quality. Improve it using the provided data.
-
-Previous Response: {response_text}
-
-User Query: {user_prompt}
-Data: {extracted_data}
-
-Provide a better, more detailed response using specific information from the data."""
-
-            retry_response_obj = client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=retry_prompt
-            )
-            response_text = retry_response_obj.text
-
-        return Response({"response": response_text})
+auth_code = st.text_input("Enter LinkedIn Auth Code (after login):")
+if st.button("Exchange Auth Code"):
+    resp = requests.post(f"{FASTAPI_URL}/api/linkedin/token-exchange/", json={"auth_code": auth_code})
+    if resp.status_code == 200:
+        st.session_state.linkedin_token = resp.json()["access_token"]
+        st.success("Access token saved.")
+    else:
+        st.error("Failed to exchange auth code.")
