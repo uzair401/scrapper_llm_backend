@@ -6,9 +6,11 @@ from rest_framework.authentication import TokenAuthentication
 from rest_framework.authtoken.models import Token
 from allauth.socialaccount.models import SocialAccount, SocialToken
 from django.conf import settings
-import os
-import re
-import json
+from django.views.decorators.csrf import csrf_exempt
+from django.utils.decorators import method_decorator
+from django.contrib.auth.decorators import login_required
+from django.http import HttpResponse
+import os, re, json
 from dotenv import load_dotenv
 from google import genai
 from allauth.account.signals import user_logged_in
@@ -19,11 +21,8 @@ client = genai.Client(api_key=os.getenv("GOOGLE_API_KEY"))
 
 @receiver(user_logged_in)
 def generate_auth_token_on_login(request, user, **kwargs):
-    token, created = Token.objects.get_or_create(user=user)
+    token, _ = Token.objects.get_or_create(user=user)
     print(f"Token generated for user {user.username}: {token.key}")
-
-from django.views.decorators.csrf import csrf_exempt
-from django.utils.decorators import method_decorator
 
 @method_decorator(csrf_exempt, name='dispatch')
 class LinkedInAuthCheckView(APIView):
@@ -45,7 +44,6 @@ class LinkedInAuthCheckView(APIView):
 
         return Response({"access_token": token_obj.token})
 
-@method_decorator(csrf_exempt, name='dispatch')
 class LinkedInGetTokenView(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -62,7 +60,6 @@ class LinkedInGetTokenView(APIView):
 
         return Response({"access_token": token_obj.token})
 
-@method_decorator(csrf_exempt, name='dispatch')
 class LinkedInPostView(APIView):
     authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
@@ -160,3 +157,8 @@ Provide a better, more detailed response using specific information from the dat
             response_text = retry_response_obj.text
 
         return Response({"response": response_text})
+
+@login_required
+def show_token(request):
+    token, _ = Token.objects.get_or_create(user=request.user)
+    return HttpResponse(f"Your DRF Token: <b>{token.key}</b><br><br>Copy and paste it in Streamlit.")
